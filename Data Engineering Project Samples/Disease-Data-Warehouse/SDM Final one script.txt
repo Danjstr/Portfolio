@@ -1,1 +1,511 @@
 
+
+-- Structure Data Managment
+-- Final Disease Model Script
+
+--
+-- Tables for Database and Data Warehouse
+--
+
+-- To make changes:
+--
+DROP TABLE public.indication;
+DROP TABLE public.race_disease_propensity;
+DROP TABLE public.disease_patient;
+DROP TABLE public.disease;
+DROP TABLE public.person;
+DROP TABLE public.location;
+DROP TABLE public.disease_type;
+DROP TABLE public.race;
+DROP TABLE public.medicine;
+--
+-- DB: all table creation for database:
+
+
+CREATE TABLE public.disease_type(
+	disease_type_code INT PRIMARY KEY,
+	disease_type_description VARCHAR,
+	other_note VARCHAR);
+	
+CREATE TABLE public.disease(
+	disease_id INT PRIMARY KEY,
+	disease_name VARCHAR,
+	intensity_lvl_qty INT DEFAULT 1,
+	disease_type_code INT REFERENCES public.disease_type( disease_type_code),
+	source_disease_code INT REFERENCES public.disease( disease_id ));
+
+CREATE TABLE public.location(
+	location_id INT PRIMARY KEY,
+	city_name varchar,
+	state_province_name VARCHAR DEFAULT NULL,
+	country_name VARCHAR,
+	country_key VARCHAR,
+	wealth_rank_number INT);
+	
+CREATE TABLE public.race(
+	race_code VARCHAR PRIMARY KEY,
+	race_description VARCHAR );
+
+CREATE TABLE public.person(
+	person_id INT PRIMARY KEY,
+	last_name VARCHAR,
+	first_name VARCHAR,
+	gender VARCHAR,
+	primary_location_id INT REFERENCES public.location( location_id ),
+	race_code VARCHAR REFERENCES public.race( race_code ));
+	
+CREATE TABLE public.disease_patient(
+	person_id INT REFERENCES public.person( person_id ),
+	disease_id INT REFERENCES public.disease( disease_id ),
+	severity_value INT DEFAULT 1,
+	start_date date,
+	recovery_ind BOOLEAN DEFAULT false,
+	PRIMARY KEY( person_id, disease_id) );
+	
+CREATE TABLE public.race_disease_propensity(
+	race_code VARCHAR REFERENCES public.race( race_code ),
+	disease_id INT REFERENCES public.disease( disease_id ),
+	propensity_value INT,
+	PRIMARY KEY( race_code, disease_id ));
+	
+CREATE TABLE public.medicine( 
+	medicine_id INT PRIMARY KEY,
+	standard_industry_num VARCHAR,
+	name VARCHAR,
+	company VARCHAR,
+	active_ingredient_name VARCHAR );
+
+CREATE TABLE public.indication(
+	medicine_id INT REFERENCES public.medicine( medicine_id ),
+	disease_id INT REFERENCES public.disease( disease_id ),
+	indication_date DATE,
+	effectivness_percent FLOAT,
+	PRIMARY KEY( medicine_id, disease_id ));
+--
+--	
+----------------------------
+-- Dimensional Model Script:
+----------------------------
+-- To make changes:
+DROP VIEW  disease_dw.vw_disease_fact;
+DROP TABLE disease_dw.disease_patient_fact;
+DROP TABLE disease_dw.person;
+DROP TABLE disease_dw.race;
+DROP TABLE disease_dw.gender;
+DROP TABLE disease_dw.date;
+DROP TABLE disease_dw.location_country;
+DROP TABLE disease_dw.location_city;
+DROP TABLE disease_dw.disease;
+DROP TABLE disease_dw.disease_type;
+--
+-- All (1) table creation for Datawarehouse and INSERT INTO code:
+
+CREATE TABLE disease_dw.gender(
+	gender_id SERIAL,
+	gender_code VARCHAR PRIMARY KEY,
+	gender_description VARCHAR );
+INSERT INTO disease_dw.gender( gender_code ) ((SELECT DISTINCT( gender) FROM public.person) UNION (SELECT 'O'));
+UPDATE disease_dw.gender SET gender_description = 'other' WHERE gender_code = 'O';
+UPDATE disease_dw.gender SET gender_description = 'male' WHERE gender_code = 'M';
+UPDATE disease_dw.gender SET gender_description = 'female' WHERE gender_code = 'F';
+
+--
+BEGIN;
+CREATE TABLE disease_dw.race(
+	race_id SERIAL,
+	race_code VARCHAR PRIMARY KEY,
+	race_description VARCHAR,
+	avg_propensity_rate INT );
+--{
+--{
+CREATE TABLE public.race_trasfer(race_code_transfer VARCHAR, race_description VARCHAR);
+
+INSERT INTO public.race_trasfer( race_code_transfer, race_description )
+(SELECT DISTINCT( race_code ), race_description FROM public.race);
+--}
+--{
+CREATE TABLE public.race_transfer_propensity_rate( race_code VARCHAR, avg_propensity_value NUMERIC );
+
+INSERT INTO public.race_transfer_propensity_rate (SELECT DISTINCT(race_code), AVG(propensity_value) AS avg_propensity_value FROM public.race_disease_propensity 
+ GROUP BY  race_code);
+--}
+--{
+INSERT INTO disease_dw.race( race_code, race_description, avg_propensity_rate )
+(SELECT tr.race_code_transfer, tr.race_description, tp.avg_propensity_value 
+FROM 
+public.race_trasfer tr
+LEFT JOIN public.race_transfer_propensity_rate tp
+on tp.race_code = tr.race_code_transfer);
+--{
+DROP TABLE public.race_trasfer, public.race_transfer_propensity_rate;
+END;
+--{
+
+CREATE TABLE disease_dw.person(
+	person_id SERIAL PRIMARY KEY,
+	last_name VARCHAR,
+	first_name VARCHAR,
+	gender_code VARCHAR REFERENCES disease_dw.gender( gender_code ),
+	race_code VARCHAR REFERENCES disease_dw.race( race_code ),
+	recovery_ind BOOLEAN DEFAULT false,
+	is_pending BOOLEAN DEFAULT true);
+INSERT INTO disease_dw.person( last_name, first_name, gender_code, race_code, recovery_ind)  
+(SELECT p.last_name, p.first_name, p.gender, p.race_code, d.recovery_ind  FROM public.person p, public.disease_patient d
+WHERE d.person_id = p.person_id);
+
+CREATE TABLE disease_dw.disease_type(
+	disease_type_id SERIAL PRIMARY KEY,
+	disease_type_code INT,
+	disease_description VARCHAR );
+INSERT INTO disease_dw.disease_type( disease_type_code, disease_description )
+(SELECT disease_type_code, disease_type_description FROM public.disease_type);
+
+CREATE TABLE disease_dw.disease(
+	disease_id SERIAL PRIMARY KEY,
+	disease_name VARCHAR,
+	intensity_lvl_qty INT,
+	disease_type_id INT REFERENCES disease_dw.disease_type( disease_type_id ),
+	begin_eff_date date DEFAULT '0001-01-01',
+	end_eff_date date DEFAULT '0001-01-01',
+	change_reason_text VARCHAR DEFAULT NULL,
+	current_flag BOOLEAN DEFAULT true);
+	
+INSERT INTO disease_dw.disease( disease_name, intensity_lvl_qty, disease_type_id ) 
+(SELECT disease_name, intensity_lvl_qty, disease_type_code FROM public.disease);
+
+CREATE TABLE disease_dw.location_country(
+	country_id SERIAL PRIMARY KEY,
+	country_Nk VARCHAR,
+	country_name VARCHAR,
+	begin_eff_date date DEFAULT '0001-01-01',
+	end_eff_date date DEFAULT '0001-01-01',
+	change_reason_text VARCHAR DEFAULT NULL,
+	current_flag BOOLEAN DEFAULT true);
+INSERT INTO disease_dw.location_country( country_name, country_Nk ) 
+(SELECT DISTINCT( country_name ) , country_key  FROM public.location);
+
+CREATE TABLE disease_dw.location_city(
+	city_id SERIAL PRIMARY KEY,
+	city_name VARCHAR,
+	begin_eff_date date DEFAULT '0001-01-01',
+	end_eff_date date DEFAULT '0001-01-01',
+	change_reason_text VARCHAR DEFAULT NULL,
+	current_flag BOOLEAN DEFAULT true);
+INSERT INTO disease_dw.location_city( city_name ) (SELECT DISTINCT( city_name ) FROM public.location);
+
+CREATE TABLE disease_dw.date(
+	date_id SERIAL PRIMARY KEY,
+	date_of_dis_confirmation date );
+INSERT INTO disease_dw.date( date_of_dis_confirmation)  (SELECT DISTINCT( start_date ) FROM public.disease_patient);
+
+CREATE TABLE disease_dw.disease_patient_fact(
+	disease_patient_id SERIAL PRIMARY KEY,
+	person_id INT REFERENCES disease_dw.person( person_id ),
+	disease_id INT REFERENCES disease_dw.disease( disease_id ),
+	country_id INT REFERENCES disease_dw.location_country( country_id ),
+	city_id INT REFERENCES disease_dw.location_city( city_id ),
+	date_id INT REFERENCES disease_dw.date( date_id ) );
+	
+INSERT INTO disease_dw.disease_patient_fact( person_id, disease_id, country_id, city_id, date_id  )
+(SELECT a.person_id, c.disease_id, f.country_id, h.city_id, i.date_id 
+
+FROM disease_dw.person a, public.person b, disease_dw.disease c, public.disease d, public.disease_patient e,
+	disease_dw.location_country f, public.location g, disease_dw.location_city h, disease_dw.date i 
+
+WHERE      b.person_id = a.person_id 
+AND		   d.disease_id = c.disease_id	
+AND		   a.person_id = e.person_id
+AND 	   d.disease_id = e.disease_id
+AND 	   b.primary_location_id = g.location_id
+AND		   f.country_name = g.country_name
+AND		   h.city_name = g.city_name
+AND		   i.date_of_dis_confirmation = e.start_date);
+
+CREATE VIEW disease_dw.vw_disease_fact AS 
+(SELECT a.disease_patient_id, b.last_name, b.first_name, c.gender_description, d.race_code, 
+	   h.disease_name, f.country_name, g.city_name, e.date_of_dis_confirmation
+
+FROM disease_dw.disease_patient_fact a, disease_dw.person b, disease_dw.gender c, disease_dw.race d, disease_dw.date e,
+	 disease_dw.location_country f, disease_dw.location_city g, disease_dw.disease h
+
+WHERE 		b.person_id	=	a.person_id
+AND			b.gender_code = c.gender_code
+AND			b.race_code = d.race_code
+AND			h.disease_id =	a.disease_id
+AND			f.country_id =	a.country_id
+AND			g.city_id 	=	a.city_id
+AND			e.date_id 	=	a.date_id);
+
+SELECT * FROM disease_dw.vw_disease_fact
+
+-- materialized view:
+
+CREATE MATERIALIZED VIEW disease_dw.mvw_disease_fact AS (SELECT a.disease_patient_id, b.last_name, b.first_name, c.gender_description, d.race_code, 
+	   h.disease_name, f.country_name, g.city_name, e.date_of_dis_confirmation
+
+FROM disease_dw.disease_patient_fact a, disease_dw.person b, disease_dw.gender c, disease_dw.race d, disease_dw.date e,
+	 disease_dw.location_country f, disease_dw.location_city g, disease_dw.disease h
+
+WHERE 		b.person_id	=	a.person_id
+AND			b.gender_code = c.gender_code
+AND			b.race_code = d.race_code
+AND			h.disease_id =	a.disease_id
+AND			f.country_id =	a.country_id
+AND			g.city_id 	=	a.city_id
+AND			e.date_id 	=	a.date_id);
+
+SELECT * FROM  disease_dw.mvw_disease_fact
+
+REFRESH MATERIALIZED VIEW disease_dw.mvw_disease_fact
+
+
+
+-- Basic operation queries:
+ELECT rd.race_code, rd.propensity_value, r.race_description
+FROM public.race r
+JOIN race_disease_propensity rd
+ON rd.race_code = r.race_code;
+--
+SELECT d.disease_name, d.intensity_lvl_qty, dp.severity_value
+FROM public.disease d
+JOIN disease_patient dp 
+ON d.disease_id = dp.disease_id;
+
+
+
+-- More operation Queries:
+
+SELECT * FROM disease_dw.disease_patient_fact
+
+SELECT * FROM disease_dw.mvw_disease_fact
+
+REFRESH MATERIALIZED VIEW disease_dw.mvw_disease_fact
+
+-- How many have a relationship per disease:
+
+CREATE MATERIALIZED VIEW disease_dw.vw_disease_case_per_city AS
+(SELECT city_name, disease_name,  COUNT(*) AS "cases_num" FROM disease_dw.vw_disease_fact GROUP BY city_name, disease_name)
+
+DROP MATERIALIZED VIEW disease_dw.vw_disease_case_per_city
+
+REFRESH MATERIALIZED VIEW disease_dw.vw_disease_case_per_city
+
+
+CREATE MATERIALIZED VIEW disease_dw.mvw_disease_over_all AS 
+( SELECT disease_name, COUNT(*) AS case_num  FROM disease_dw.mvw_disease_fact GROUP BY disease_name ORDER BY case_num ASC)
+
+REFRESH MATERIALIZED VIEW disease_dw.mvw_disease_over_all
+
+SELECT * FROM disease_dw.mvw_disease_over_all
+
+
+-- most case disease:
+SELECT disease_name, COUNT(*) AS case_num  FROM disease_dw.mvw_disease_fact GROUP BY disease_name 
+ORDER BY case_num DESC LIMIT 1
+
+
+
+---------------
+--Experimenting:
+---------------
+
+
+(SELECT disease_name, count(*) AS "num_cases" FROM disease_dw.vw_disease_fact GROUP BY disease_name ORDER BY disease_name)q
+
+
+(SELECT city_name, disease_name,  COUNT(*) AS "cases_num" FROM disease_dw.vw_disease_fact 
+ GROUP BY city_name, disease_name ORDER BY disease_name)p
+
+
+
+-- num of cases of diesease per city
+(SELECT  city_name, disease_name, count(*) AS num_cases
+FROM disease_dw.vw_disease_fact GROUP BY city_name, disease_name)p
+
+SELECT disease_dw.zone_identifier()
+
+
+DROP FUNCTION disease_dw.zone_identifier ( )
+CREATE FUNCTION disease_dw.zone_identifier ( )
+RETURNS VOID
+LANGUAGE 'plpgsql'
+AS
+$$
+
+BEGIN
+
+	IF p.num_cases >= .10 * sum(q.sum) 
+	
+	FROM 
+	
+	(SELECT  city_name, disease_name, count(*) AS num_cases
+	FROM disease_dw.vw_disease_fact GROUP BY city_name, disease_name)p,
+	(select  disease_name, SUM(num_cases) FROM ( SELECT  city_name, disease_name, count(*) AS num_cases
+	FROM disease_dw.vw_disease_fact GROUP BY  disease_name, city_name )r group by disease_name)q
+	
+	where q.disease_name = p.disease_name 
+	THEN RAISE NOTICE '% is a red zone', p.city_name;
+	
+	END IF;
+END;
+$$
+-----
+-- end
+-----
+
+--
+-- This tutorial is a walk through of type 2 changes for a Disease and country:
+--
+----------
+-- Execute
+----------
+--
+-- Disease Name change: Italy changed name to Italia:
+--
+SELECT * FROM disease_dw.location_country
+WHERE country_name = 'Italy'
+
+-- update old row and add a new one in:
+
+INSERT INTO disease_dw.location_country( country_nk, country_name, begin_eff_date) VALUES
+( 'IT', 'Italia', '2020-12-21' );
+
+UPDATE disease_dw.location_country SET
+begin_eff_date = '2020-12-01'
+end_eff_date = '2020-12-21'
+change_reason_text = 'dud'
+current_flag = false
+WHERE country_name = 'Italy';
+
+
+SELECT * FROM disease_dw.location_country WHERE country_nk = 'IT'
+
+UPDATE disease_dw.disease_patient_fact
+SET country_id = (new country_id)
+WHERE country_id = (old coutnry_id)
+
+SELECT * FROM disease_dw.disease_patient_fact
+
+---
+---
+
+--
+-- SSC: Disease Final
+--
+----------
+
+-- Disease new name
+--
+-- Issue with insert?
+
+
+SELECT * FROM disease_dw.disease
+
+INSERT INTO disease_dw.disease(intensity_lvl_qty, disease_type_id) VALUES ( 4, 3 )
+
+DELETE FROM disease_dw.disease WHERE disease_id = 24
+
+
+-- now let's create the trigger:
+DROP trigger disease_flag ON disease_dw.disease;
+DROP FUNCTION disease_dw.country_nk() 
+
+CREATE FUNCTION disease_dw.country_nk()
+RETURNS TRIGGER
+LANGUAGE 'plpgsql'
+AS
+$$
+BEGIN
+
+	IF NEW.current_flag IS true and NEW.disease_name IS NULL
+	THEN RAISE EXCEPTION 'ERROR: cannot have current disease name unaccounted';
+	END IF;
+	
+RETURN NEW;
+END;
+$$
+
+CREATE TRIGGER disease_flag
+BEFORE INSERT OR UPDATE
+ON disease_dw.disease
+FOR EACH ROW
+EXECUTE PROCEDURE disease_dw.country_nk()
+
+----------
+----------
+
+
+SELECT * FROM disease_dw.location_country
+
+INSERT INTO disease_dw.location_country( country_name ) VALUES ( 'Piraeus' )
+
+DELETE FROM disease_dw.location_country WHERE country_name = 'Piraeus'
+
+
+-- Now, let's create a trigger:
+
+DROP TRIGGER location_country ON disease_dw.location_country;
+DROP FUNCTION disease_dw.country_nk()
+
+CREATE FUNCTION disease_dw.country_nk()
+RETURNS TRIGGER
+LANGUAGE 'plpgsql'
+AS
+$$
+BEGIN
+
+	IF NEW.current_flag IS true AND NEW.country_nk IS NULL 
+	THEN RAISE EXCEPTION 'ERROR: Must have country natural key';
+	END IF;
+	
+RETURN NEW;
+END;
+$$
+
+CREATE TRIGGER location_country
+BEFORE INSERT OR UPDATE
+ON disease_dw.location_country
+FOR EACH ROW
+EXECUTE PROCEDURE disease_dw.country_nk()
+
+----------
+----------
+
+
+SELECT * FROM disease_dw.person
+
+INSERT INTO disease_dw.person( last_name, first_name, gender_code, race_code, recovery_ind ) 
+VALUES ( 'Dirk', 'Ron', 'M', 'W', 'true'  )
+
+DELETE FROM disease_dw.person WHERE last_name = 'Dirk' AND first_name = 'Ron'
+
+
+-- Let's create a trigger:
+DROP TRIGGER person_status ON disease_dw.person;
+DROP FUNCTION disease_dw.person_mortal_status()
+
+CREATE FUNCTION disease_dw.person_mortal_status()
+RETURNS TRIGGER
+LANGUAGE 'plpgsql'
+AS
+$$
+BEGIN
+
+	IF NEW.recovery_ind IS true AND NEW.is_pending IS true
+	THEN RAISE EXCEPTION 'ERROR: cannot be recovered and pending - inaccuracy violation';
+	END IF;
+	
+RETURN NEW;
+END;
+$$
+
+CREATE TRIGGER person_status
+BEFORE INSERT OR UPDATE
+ON disease_dw.person
+FOR EACH ROW
+EXECUTE PROCEDURE disease_dw.person_mortal_status()
+----------
+----------
+-- end;
+
+
